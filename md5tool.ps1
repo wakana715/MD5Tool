@@ -128,6 +128,7 @@ $Font = New-Object System.Drawing.Font("ＭＳ ゴシック",12)
 # フォーム全体の設定
 $form.Text = "MD5Tool"
 $form.Size = New-Object System.Drawing.Size(320,200)
+$form.MinimumSize = New-Object System.Drawing.Size(320,200)
 $form.StartPosition = "CenterScreen"
 $form.font = $Font
 
