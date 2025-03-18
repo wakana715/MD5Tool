@@ -1,3 +1,10 @@
+/*!
+ * @file MD5Tool.cpp
+ * @brief ディレクトリを再帰的に捜査してファイル一覧のMD5を算出してログファイルに出力する
+ * @author wakana
+ * @date 2025
+ */
+
 #include <SDKDDKVer.h>
 #include <windows.h>
 #include <processthreadsapi.h>
@@ -20,12 +27,24 @@ HANDLE  g_handle = INVALID_HANDLE_VALUE;
 byte    g_buf[BUF_SIZE] = { 0 };
 bool	g_stop = false;
 
-static int WideToStr(const wchar_t* _p_wcs, char* _p_str, const int len)
+/*!
+ * @brief ワイド文字(UTF-16)からバイト文字(UTFF-8)へ変換する
+ * @param[in]	_p_wcs ワイド文字(UTF-16)のポインタ
+ * @param[in]	_size  ワイド文字(UTF-16)のバイト数
+ * @param[out]	_p_str バイト文字(UTF-8)のポインタ
+ * @return バイト文字のバイト数
+ */
+static int WideToStr(const wchar_t* _p_wcs, const int _size, char* _p_str)
 {
-	return WideCharToMultiByte(CP_UTF8, 0, _p_wcs, -1, _p_str, len, NULL, NULL);
+	return WideCharToMultiByte(CP_UTF8, 0, _p_wcs, -1, _p_str, _size, NULL, NULL);
 }
 
-static bool ShellRegGetFromPath()
+/*!
+ * @brief レジストリからパス文字を取得して、ロングフルパス形式に変換する
+ * @param[in]	_p_name レジストリ名のポインタ
+ * @return true:成功, false:失敗
+ */
+static bool ShellRegGetPath(const wchar_t* _p_name)
 {
 	HKEY hKey;
 	{
@@ -39,7 +58,7 @@ static bool ShellRegGetFromPath()
 	char    *pchar = reinterpret_cast< char  *>(g_buf);
 	wchar_t *pwide = reinterpret_cast<wchar_t*>(g_buf);
 	{
-		LSTATUS stat = ::RegGetValueW(hKey, L"MD5Tool", L"FromPath", RRF_RT_REG_SZ, 0, pchar, &size);
+		LSTATUS stat = ::RegGetValueW(hKey, L"MD5Tool", _p_name, RRF_RT_REG_SZ, 0, pchar, &size);
 		(void)::RegCloseKey(hKey);
 		if (ERROR_SUCCESS != stat)
 		{
@@ -62,7 +81,13 @@ static bool ShellRegGetFromPath()
 	return true;
 }
 
-static void ShellRegGetStatus(DWORD* _p_status)
+/*!
+ * @brief レジストリから数値(DWORD)を取得する
+ * @param[in]	_p_name レジストリ名のポインタ
+ * @param[out]	_p_dword 数値のポインタ
+ * @return true:成功, false:失敗
+ */
+static void ShellRegGetDWORD(const wchar_t* _p_name, DWORD* _p_dword)
 {
 	HKEY hKey;
 	{
@@ -74,7 +99,7 @@ static void ShellRegGetStatus(DWORD* _p_status)
 	}
 	DWORD size;
 	{
-		LSTATUS stat = ::RegGetValueW(hKey, L"MD5Tool", L"Status", RRF_RT_REG_DWORD, 0, _p_status, &size);
+		LSTATUS stat = ::RegGetValueW(hKey, L"MD5Tool", _p_name, RRF_RT_REG_DWORD, 0, _p_dword, &size);
 		(void)::RegCloseKey(hKey);
 		if (ERROR_SUCCESS != stat)
 		{
@@ -83,6 +108,11 @@ static void ShellRegGetStatus(DWORD* _p_status)
 	}
 }
 
+/*!
+ * @brief レジストリキー作成
+ * @param[out]	_p_ret 処理結果のポインタ true:成功, faise:失敗
+ * @return レジストリハンドル(HKEY)
+ */
 static HKEY ShellRegCreate(bool* _p_ret)
 {
 	*_p_ret = true;
@@ -109,7 +139,14 @@ static HKEY ShellRegCreate(bool* _p_ret)
 	return hKey2;
 }
 
-static void ShellRegSetTime(const wchar_t* _p_name, const wchar_t* _p_time)
+/*!
+ * @brief レジストリにワイド文字(UTF-16)を設定する
+ * @param[in]	_p_name レジストリ名のポインタ
+ * @param[in]	_p_str  ワイド文字のポインタ
+ * @param[in]	_p_str  ワイド文字の長さ
+ * @return なし
+ */
+static void ShellRegSetStr(const wchar_t* _p_name, const wchar_t* _p_str, const int _len)
 {
 	bool ret;
 	HKEY hKey = ShellRegCreate(&ret);
@@ -117,28 +154,30 @@ static void ShellRegSetTime(const wchar_t* _p_name, const wchar_t* _p_time)
 	{
 		return;
 	}
-	DWORD size =      static_cast<DWORD>(wcsnlen_s(_p_time, 11) * sizeof(wchar_t));
-	BYTE*    p = reinterpret_cast<BYTE*>(const_cast<wchar_t*>(_p_time));
-	LSTATUS stat = ::RegSetValueExW(hKey, _p_name, 0, REG_SZ, p, size);
+	DWORD size  =      static_cast<DWORD>(_len * sizeof(wchar_t));
+	BYTE* pbyte = reinterpret_cast<BYTE*>(const_cast<wchar_t*>(_p_str));
+	LSTATUS stat = ::RegSetValueExW(hKey, _p_name, 0, REG_SZ, pbyte, size);
 	(void)::RegCloseKey(hKey);
 }
 
+/*!
+ * @brief レジストリに処理中のファイル名を設定する
+ * @return なし
+ */
 static void ShellRegSetPath()
 {
-	bool ret;
-	HKEY hKey = ShellRegCreate(&ret);
-	if (!ret)
-	{
-		return;
-	}
 	wchar_t* pwide = reinterpret_cast<wchar_t*>(g_buf);
-	DWORD size = static_cast<DWORD>(wcsnlen_s(&pwide[g_len], LONG_PATH) * sizeof(wchar_t));
-	BYTE* pbyte = reinterpret_cast<BYTE*>(&pwide[g_len]);
-	LSTATUS stat = ::RegSetValueExW(hKey, L"ToPath", 0, REG_SZ, pbyte, size);
-	(void)::RegCloseKey(hKey);
+	int len = static_cast<int>(wcsnlen_s(&pwide[g_len], LONG_PATH));
+	ShellRegSetStr(L"ToPath", &pwide[g_len], len);
 }
 
-static void ShellRegSetStatus(DWORD _status)
+/*!
+ * @brief レジストリに数値(DWORD)を設定する
+ * @param[in]	_p_name レジストリ名のポインタ
+ * @param[in]	_dword 数値
+ * @return なし
+ */
+static void ShellRegSetDWORD(const wchar_t* _p_name, const DWORD _dword)
 {
 	bool ret;
 	HKEY hKey = ShellRegCreate(&ret);
@@ -147,10 +186,17 @@ static void ShellRegSetStatus(DWORD _status)
 		return;
 	}
 	DWORD size = sizeof(DWORD);
-	LSTATUS stat = ::RegSetValueExW(hKey, L"Status", 0, REG_DWORD, reinterpret_cast<BYTE*>(&_status), size);
+	DWORD val = _dword;
+	LSTATUS stat = ::RegSetValueExW(hKey, L"Status", 0, REG_DWORD, reinterpret_cast<BYTE*>(&val), size);
 	(void)::RegCloseKey(hKey);
 }
 
+/*!
+ * @brief ファイルのハッシュ値(MD5)を算出する
+ * @param[in]	_p_path ファイルパスのポインタ
+ * @param[in]	_hash ハッシュ値
+ * @return true:成功, false:失敗
+ */
 static bool GetFileHash(const wchar_t* _p_path, std::wstring& _hash)
 {
 	HCRYPTPROV hCryptProv;
@@ -224,6 +270,11 @@ static bool GetFileHash(const wchar_t* _p_path, std::wstring& _hash)
 	return true;
 }
 
+/*!
+ * @brief ファイルのパスとハッシュ値をログファイルへ出力する
+ * @param[in]	_p_path ファイルパスのポインタ
+ * @return なし
+ */
 static void GetHash(const wchar_t* _p_path)
 {
 	if (g_stop)
@@ -231,7 +282,7 @@ static void GetHash(const wchar_t* _p_path)
 		return;
 	}
 	DWORD status = 1;
-	ShellRegGetStatus(&status);
+	ShellRegGetDWORD(L"Status", &status);
 	if (status == 4)	// 4:中断要求
 	{
 		(void)::CloseHandle(g_handle);
@@ -251,11 +302,16 @@ static void GetHash(const wchar_t* _p_path)
 	wss << L"\x0d\x0a";
 	char* pchar = reinterpret_cast<char*>(g_buf);
 	int size = static_cast<int>(wss.str().size() * sizeof(wchar_t));
-	int len = WideToStr(wss.str().c_str(), pchar, size);
+	int len = WideToStr(wss.str().c_str(), size, pchar);
 	(void)::WriteFile(g_handle, pchar, len - 1, NULL, NULL);
 	(void)::FlushFileBuffers(g_handle);
 }
 
+/*!
+ * @brief ディレクトリを再帰的に捜査してファイルパスを取得する
+ * @param[in]	_p_path ファイルパスのポインタ
+ * @return true:成功, false:失敗
+ */
 static bool GetFile(const wchar_t* _p_path)
 {
 	std::wstring wcsPath = _p_path;
@@ -318,6 +374,12 @@ static bool GetFile(const wchar_t* _p_path)
 	return true;
 }
 
+/*!
+ * @brief 日時型(SYSTEMTIME)を文字列に変換する
+ * @param[in]	_time 日時
+ * @param[out]	_wstrDate 変換した文字列
+ * @return なし
+ */
 static void GetStrDate(SYSTEMTIME _time, std::wstring& _wstrDate)
 {
 	std::wstringstream wss;
@@ -330,11 +392,15 @@ static void GetStrDate(SYSTEMTIME _time, std::wstring& _wstrDate)
 	wss >> _wstrDate;
 }
 
+/*!
+ * @brief 画面入力(FromPath)を取得する。処理時間をレポートファイルへ追記する。
+ * @return なし
+ */
 static void MD5Tool()
 {
 	SYSTEMTIME start, end;
 	(void)::GetLocalTime(&start);
-	if (!ShellRegGetFromPath())
+	if (!ShellRegGetPath(L"FromPath"))
 	{
 		return;
 	}
@@ -345,7 +411,7 @@ static void MD5Tool()
 	std::wstring wcsDesktop = pwide;
 	std::wstring wcsStart;
 	GetStrDate(start, wcsStart);
-	ShellRegSetTime(L"Start", wcsStart.c_str());
+	ShellRegSetStr(L"Start", wcsStart.c_str(), static_cast<int>(wcsStart.length()));
 	for (int i = 0; i < 1000; i++)
 	{
 		std::wstringstream wss;
@@ -374,7 +440,7 @@ static void MD5Tool()
 	(void)::GetLocalTime(&end);
 	std::wstring wcsEnd;
 	GetStrDate(end, wcsEnd);
-	ShellRegSetTime(L"End", wcsEnd.c_str());
+	ShellRegSetStr(L"End", wcsEnd.c_str(), static_cast<int>(wcsEnd.length()));
 	FILETIME fstart, fend;
 	(void)::SystemTimeToFileTime(&start, &fstart);
 	(void)::SystemTimeToFileTime(&end,   &fend);
@@ -396,13 +462,17 @@ static void MD5Tool()
 			wss << g_stop	<< L"\x0d\x0a";
 			char*  p = reinterpret_cast<char*>(g_buf);
 			int size = static_cast<int>(wss.str().size() * sizeof(wchar_t));
-			int len = WideToStr(wss.str().c_str(), p, size);
+			int len = WideToStr(wss.str().c_str(), size, p);
 			(void)::WriteFile(  g_handle, p, len - 1, NULL, NULL);
 			(void)::CloseHandle(g_handle);
 		}
 	}
 }
 
+/*!
+ * @brief 画面を表示する。実行終了まで待機する。
+ * @return 0固定
+ */
 int APIENTRY wWinMain(
 	HINSTANCE hInstance,
 	HINSTANCE hPrevInstance,
@@ -424,15 +494,15 @@ int APIENTRY wWinMain(
 			if (dwRet == WAIT_TIMEOUT)
 			{
 				DWORD status = 0xFFFFFFFF;
-				ShellRegGetStatus(&status);
-				if (status == 1)				// 1:実行要求
+				ShellRegGetDWORD(L"Status", &status);
+				if (status == 1)						// 1:実行要求
 				{
 					g_stop = false;
-					ShellRegSetStatus(2);		// 2:実行中
+					ShellRegSetDWORD(L"Status", 2);		// 2:実行中
 					MD5Tool();
 					if (!g_stop)
 					{
-						ShellRegSetStatus(3);	// 3:正常終了
+						ShellRegSetDWORD(L"Status", 3);	// 3:正常終了
 					}
 				}
 			}
