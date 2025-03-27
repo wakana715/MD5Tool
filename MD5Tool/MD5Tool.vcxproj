@@ -163,7 +163,25 @@
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="GetDesktopDirectory.cpp" />
+    <ClCompile Include="GetFileHashMD5.cpp" />
+    <ClCompile Include="GetModuleDirectory.cpp" />
+    <ClCompile Include="GetTemporaryFile.cpp" />
     <ClCompile Include="MD5Tool.cpp" />
+    <ClCompile Include="ReadFileInt.cpp" />
+    <ClCompile Include="ReadFileMap.cpp" />
+    <ClCompile Include="WriteFileInt.cpp" />
+    <ClCompile Include="WriteFileStrU16.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="GetDesktopDirectory.h" />
+    <ClInclude Include="GetFileHashMD5.h" />
+    <ClInclude Include="GetModuleDirectory.h" />
+    <ClInclude Include="GetTemporaryFile.h" />
+    <ClInclude Include="ReadFileInt.h" />
+    <ClInclude Include="ReadFileMap.h" />
+    <ClInclude Include="WriteFileInt.h" />
+    <ClInclude Include="WriteFileStrU16.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

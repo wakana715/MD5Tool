@@ -1,316 +1,152 @@
-/*!
+ï»¿/*!
  * @file MD5Tool.cpp
- * @brief ƒfƒBƒŒƒNƒgƒŠ‚ğÄ‹A“I‚É‘{¸‚µ‚Äƒtƒ@ƒCƒ‹ˆê——‚ÌMD5‚ğZo‚µ‚ÄƒƒOƒtƒ@ƒCƒ‹‚Éo—Í‚·‚é
- * @author wakana
+ * @brief ãƒ‡ã‚£ãƒ¬ã‚¯ãƒˆãƒªã‚’å†å¸°çš„ã«æœæŸ»ã—ã¦ãƒ•ã‚¡ã‚¤ãƒ«ä¸€è¦§ã®MD5ã‚’ç®—å‡ºã—ã¦ãƒ­ã‚°ãƒ•ã‚¡ã‚¤ãƒ«ã«å‡ºåŠ›ã™ã‚‹
  * @date 2025
  */
 
-#include <SDKDDKVer.h>
+#include "GetDesktopDirectory.h"
+#include "GetModuleDirectory.h"
+#include "GetTemporaryFile.h"
+#include "GetFileHashMD5.h"
+#include "ReadFileInt.h"
+#include "ReadFileMap.h"
+#include "WriteFileInt.h"
+#include "WriteFileStrU16.h"
 #include <windows.h>
-#include <processthreadsapi.h>
-#include <shlobj.h>
-#include <stdio.h>
-#include <iostream>
 #include <iomanip>
 #include <string>
 #include <sstream>
 #include <vector>
 #include <algorithm>
-#include <chrono>
+#include <map>
 
-#define LONG_PATH	(32767)
+#define LONG_PRE_PATH	L"\\\\?\\"
+#define LONG_MAX_PATH	(32767)
+#define LONG_MAX_CMD	(LONG_MAX_PATH*3+100)
 #define BUF_SIZE	(1024*1024*256)
-#define	MD5_LEN		(16)
 
-int     g_len = 0;
-HANDLE  g_handle = INVALID_HANDLE_VALUE;
-byte    g_buf[BUF_SIZE] = { 0 };
-bool	g_stop = false;
+#if (LONG_MAX_PATH * 6 + LONG_MAX_CMD) > BUF_SIZE
+#error "LONG_MAX_PATH > BUF_SIZE"
+#endif
+
+static int		s_len = 0;
+static HANDLE	s_handle = INVALID_HANDLE_VALUE;	//ãƒ­ã‚°ãƒ•ã‚¡ã‚¤ãƒ«ã®ãƒãƒ³ãƒ‰ãƒ« <desktop>\hash_<DATE_TIME>.txt
+static byte		s_buf[BUF_SIZE]{};
+static bool		s_stop = false;
+static std::wstring s_wsTempFileParameter;
+static std::wstring s_wsTempFileStatus;
+static std::wstring s_wsTempFileProgress;
 
 /*!
- * @brief ƒƒCƒh•¶š(UTF-16)‚©‚çƒoƒCƒg•¶š(UTFF-8)‚Ö•ÏŠ·‚·‚é
- * @param[in]	_p_wcs ƒƒCƒh•¶š(UTF-16)‚Ìƒ|ƒCƒ“ƒ^
- * @param[in]	_size  ƒƒCƒh•¶š(UTF-16)‚ÌƒoƒCƒg”
- * @param[out]	_p_str ƒoƒCƒg•¶š(UTF-8)‚Ìƒ|ƒCƒ“ƒ^
- * @return ƒoƒCƒg•¶š‚ÌƒoƒCƒg”
+ * @brief ãƒ¯ã‚¤ãƒ‰æ–‡å­—(UTF-16)ã‹ã‚‰ãƒã‚¤ãƒˆæ–‡å­—(UTFF-8)ã¸å¤‰æ›ã™ã‚‹
+ * @param[in]	_p_wcs ãƒ¯ã‚¤ãƒ‰æ–‡å­—(UTF-16)ã®ãƒã‚¤ãƒ³ã‚¿
+ * @param[in]	_size  ãƒ¯ã‚¤ãƒ‰æ–‡å­—(UTF-16)ã®ãƒã‚¤ãƒˆæ•°
+ * @param[out]	_p_str ãƒã‚¤ãƒˆæ–‡å­—(UTF-8)ã®ãƒã‚¤ãƒ³ã‚¿
+ * @return ãƒã‚¤ãƒˆæ–‡å­—ã®ãƒã‚¤ãƒˆæ•°
  */
-static int WideToStr(const wchar_t* _p_wcs, const int _size, char* _p_str)
+static int W2U(const wchar_t* _p_wcs, const int _size, char* _p_str)
 {
 	return WideCharToMultiByte(CP_UTF8, 0, _p_wcs, -1, _p_str, _size, NULL, NULL);
 }
 
 /*!
- * @brief ƒŒƒWƒXƒgƒŠ‚©‚çƒpƒX•¶š‚ğæ“¾‚µ‚ÄAƒƒ“ƒOƒtƒ‹ƒpƒXŒ`®‚É•ÏŠ·‚·‚é
- * @param[in]	_p_name ƒŒƒWƒXƒgƒŠ–¼‚Ìƒ|ƒCƒ“ƒ^
- * @return true:¬Œ÷, false:¸”s
+ * @brief ãƒ†ãƒ³ãƒãƒ©ãƒªãƒ•ã‚¡ã‚¤ãƒ«åå–å¾—
+ * @param[out]	_wsFileName	ãƒ†ãƒ³ãƒãƒ©ãƒªãƒ•ã‚¡ã‚¤ãƒ«å
+ * @return 0:æˆåŠŸ, 1:GetTemporaryFileå¤±æ•—
  */
-static bool ShellRegGetPath(const wchar_t* _p_name)
+static int GetTemporaryFileName(const int _type, std::wstring& _wsFileName)
 {
-	HKEY hKey;
+	int ret = GetTemporaryFile(L"MD5", sizeof(s_buf), reinterpret_cast<wchar_t*>(s_buf));
+	if (ret != 0)
 	{
-		LSTATUS stat = ::RegCreateKeyW(HKEY_CURRENT_USER, L"Software", &hKey);
-		if (ERROR_SUCCESS != stat)
-		{
-			return false;
-		}
+		DWORD dwError = ::GetLastError();
+		std::wstringstream wss;
+		wss << L"Failed GetTemporaryFileName(" << _type << L") = " << ret << L" ";
+		wss << L" 0x" << std::hex << std::setfill(L'0') << std::setw(4) << static_cast<long>(dwError);
+		(void)::MessageBoxW(NULL, wss.str().c_str(), L"Error", MB_ICONERROR | MB_OK);
+		return 1;
 	}
-	DWORD size;
-	char    *pchar = reinterpret_cast< char  *>(g_buf);
-	wchar_t *pwide = reinterpret_cast<wchar_t*>(g_buf);
-	{
-		LSTATUS stat = ::RegGetValueW(hKey, L"MD5Tool", _p_name, RRF_RT_REG_SZ, 0, pchar, &size);
-		(void)::RegCloseKey(hKey);
-		if (ERROR_SUCCESS != stat)
-		{
-			pchar[0] = '\0';
-			return false;
-		}
-	}
-	pchar[LONG_PATH - 1] = '\0';
-	if (size < LONG_PATH)
-	{
-		pchar[size] = '\0';
-	}
-	std::wstring wcsPath = pwide;
-	std::wstring wcsPathLong = L"\\\\?\\" + wcsPath;
-	DWORD ret = ::GetFullPathNameW(wcsPathLong.c_str(), LONG_PATH, pwide, 0);
-	if (ret == 0)
-	{
-		return false;
-	}
-	return true;
+	_wsFileName = reinterpret_cast<wchar_t*>(s_buf);
+	return 0;
 }
 
 /*!
- * @brief ƒŒƒWƒXƒgƒŠ‚©‚ç”’l(DWORD)‚ğæ“¾‚·‚é
- * @param[in]	_p_name ƒŒƒWƒXƒgƒŠ–¼‚Ìƒ|ƒCƒ“ƒ^
- * @param[out]	_p_dword ”’l‚Ìƒ|ƒCƒ“ƒ^
- * @return true:¬Œ÷, false:¸”s
- */
-static void ShellRegGetDWORD(const wchar_t* _p_name, DWORD* _p_dword)
-{
-	HKEY hKey;
-	{
-		LSTATUS stat = ::RegCreateKeyW(HKEY_CURRENT_USER, L"Software", &hKey);
-		if (ERROR_SUCCESS != stat)
-		{
-			return;
-		}
-	}
-	DWORD size;
-	{
-		LSTATUS stat = ::RegGetValueW(hKey, L"MD5Tool", _p_name, RRF_RT_REG_DWORD, 0, _p_dword, &size);
-		(void)::RegCloseKey(hKey);
-		if (ERROR_SUCCESS != stat)
-		{
-			return;
-		}
-	}
-}
-
-/*!
- * @brief ƒŒƒWƒXƒgƒŠƒL[ì¬
- * @param[out]	_p_ret ˆ—Œ‹‰Ê‚Ìƒ|ƒCƒ“ƒ^ true:¬Œ÷, faise:¸”s
- * @return ƒŒƒWƒXƒgƒŠƒnƒ“ƒhƒ‹(HKEY)
- */
-static HKEY ShellRegCreate(bool* _p_ret)
-{
-	*_p_ret = true;
-	HKEY hKey1;
-	{
-		LSTATUS stat = ::RegCreateKeyW(HKEY_CURRENT_USER, L"Software", &hKey1);
-		if (ERROR_SUCCESS != stat)
-		{
-			*_p_ret = false;
-			return nullptr;
-		}
-	}
-	HKEY hKey2;
-	{
-		LSTATUS stat = ::RegCreateKeyW(hKey1, L"MD5Tool", &hKey2);
-		if (ERROR_SUCCESS != stat)
-		{
-			(void)::RegCloseKey(hKey1);
-			*_p_ret = false;
-			return nullptr;
-		}
-	}
-	(void)::RegCloseKey(hKey1);
-	return hKey2;
-}
-
-/*!
- * @brief ƒŒƒWƒXƒgƒŠ‚ÉƒƒCƒh•¶š(UTF-16)‚ğİ’è‚·‚é
- * @param[in]	_p_name ƒŒƒWƒXƒgƒŠ–¼‚Ìƒ|ƒCƒ“ƒ^
- * @param[in]	_p_str  ƒƒCƒh•¶š‚Ìƒ|ƒCƒ“ƒ^
- * @param[in]	_p_str  ƒƒCƒh•¶š‚Ì’·‚³
- * @return ‚È‚µ
- */
-static void ShellRegSetStr(const wchar_t* _p_name, const wchar_t* _p_str, const int _len)
-{
-	bool ret;
-	HKEY hKey = ShellRegCreate(&ret);
-	if (!ret)
-	{
-		return;
-	}
-	DWORD size  =      static_cast<DWORD>(_len * sizeof(wchar_t));
-	BYTE* pbyte = reinterpret_cast<BYTE*>(const_cast<wchar_t*>(_p_str));
-	LSTATUS stat = ::RegSetValueExW(hKey, _p_name, 0, REG_SZ, pbyte, size);
-	(void)::RegCloseKey(hKey);
-}
-
-/*!
- * @brief ƒŒƒWƒXƒgƒŠ‚Éˆ—’†‚Ìƒtƒ@ƒCƒ‹–¼‚ğİ’è‚·‚é
- * @return ‚È‚µ
- */
-static void ShellRegSetPath()
-{
-	wchar_t* pwide = reinterpret_cast<wchar_t*>(g_buf);
-	int len = static_cast<int>(wcsnlen_s(&pwide[g_len], LONG_PATH));
-	ShellRegSetStr(L"ToPath", &pwide[g_len], len);
-}
-
-/*!
- * @brief ƒŒƒWƒXƒgƒŠ‚É”’l(DWORD)‚ğİ’è‚·‚é
- * @param[in]	_p_name ƒŒƒWƒXƒgƒŠ–¼‚Ìƒ|ƒCƒ“ƒ^
- * @param[in]	_dword ”’l
- * @return ‚È‚µ
- */
-static void ShellRegSetDWORD(const wchar_t* _p_name, const DWORD _dword)
-{
-	bool ret;
-	HKEY hKey = ShellRegCreate(&ret);
-	if (!ret)
-	{
-		return;
-	}
-	DWORD size = sizeof(DWORD);
-	DWORD val = _dword;
-	LSTATUS stat = ::RegSetValueExW(hKey, L"Status", 0, REG_DWORD, reinterpret_cast<BYTE*>(&val), size);
-	(void)::RegCloseKey(hKey);
-}
-
-/*!
- * @brief ƒtƒ@ƒCƒ‹‚ÌƒnƒbƒVƒ…’l(MD5)‚ğZo‚·‚é
- * @param[in]	_p_path ƒtƒ@ƒCƒ‹ƒpƒX‚Ìƒ|ƒCƒ“ƒ^
- * @param[in]	_hash ƒnƒbƒVƒ…’l
- * @return true:¬Œ÷, false:¸”s
- */
-static bool GetFileHash(const wchar_t* _p_path, std::wstring& _hash)
-{
-	HCRYPTPROV hCryptProv;
-	// TIPS:CRYPT_VERIFYCONTEXT : ‘¼‚Ìƒpƒ‰ƒ[ƒ^‚ğw’è‚·‚é‚Æ Guest ƒAƒJƒEƒ“ƒg‚Å“®ì‚µ‚È‚¢
-	if (::CryptAcquireContextW(&hCryptProv, NULL, NULL, PROV_RSA_AES, CRYPT_VERIFYCONTEXT) != TRUE)
-	{
-		return false;
-	}
-	HCRYPTHASH hCryptHash;
-	ALG_ID	algid = CALG_MD5;
-	if (::CryptCreateHash(hCryptProv, algid, 0, 0, &hCryptHash) != TRUE)
-	{
-		return false;
-	}
-	HANDLE handle = ::CreateFileW(_p_path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_READONLY | FILE_FLAG_SEQUENTIAL_SCAN, NULL);
-	if (handle == INVALID_HANDLE_VALUE)
-	{
-		return false;
-	}
-	bool is_d88 = false;
-	size_t len = wcsnlen_s(_p_path, LONG_PATH);
-	if (len > 4)
-	{
-		if (_wcsnicmp(&_p_path[len - 4], L".d88", 5) == 0)
-		{
-			is_d88 = true;
-		}
-	}
-	DWORD dwRead = 0;
-	do
-	{
-		if (::ReadFile(handle, g_buf, BUF_SIZE, &dwRead, NULL) == 0)
-		{
-			return false;
-		}
-		if (is_d88)
-		{
-			is_d88 = false;
-			memset(g_buf, 0, 0x20);	// Clear Headder
-		}
-		if (::CryptHashData(hCryptHash, g_buf, dwRead, 0) != TRUE)
-		{
-			return false;
-		}
-	} while (dwRead != 0);
-	DWORD dwHashLength = MD5_LEN;
-	byte hash[MD5_LEN];
-	if (::CryptGetHashParam(hCryptHash, HP_HASHVAL, hash, &dwHashLength, 0) != TRUE)
-	{
-		return false;
-	}
-	if (handle != INVALID_HANDLE_VALUE)
-	{
-		(void)::CloseHandle(handle);
-	}
-	if (hCryptHash)
-	{
-		(void)::CryptDestroyHash(hCryptHash);
-	}
-	if (hCryptProv)
-	{
-		(void)::CryptReleaseContext(hCryptProv, 0);
-	}
-	std::wstringstream wss;
-	for (int i = 0; i < MD5_LEN; i++)
-	{
-		unsigned int val = static_cast<unsigned int>(hash[i]);
-		wss << std::setfill(L'0') << std::hex << std::setw(2) << val;
-	}
-	wss >> _hash;
-	return true;
-}
-
-/*!
- * @brief ƒtƒ@ƒCƒ‹‚ÌƒpƒX‚ÆƒnƒbƒVƒ…’l‚ğƒƒOƒtƒ@ƒCƒ‹‚Öo—Í‚·‚é
- * @param[in]	_p_path ƒtƒ@ƒCƒ‹ƒpƒX‚Ìƒ|ƒCƒ“ƒ^
- * @return ‚È‚µ
+ * @brief ãƒ•ã‚¡ã‚¤ãƒ«ã®ãƒ‘ã‚¹ã¨ãƒãƒƒã‚·ãƒ¥å€¤ã‚’ãƒ­ã‚°ãƒ•ã‚¡ã‚¤ãƒ«ã¸å‡ºåŠ›ã™ã‚‹
+ * @param[in]	_p_path ãƒ•ã‚¡ã‚¤ãƒ«ãƒ‘ã‚¹ã®ãƒã‚¤ãƒ³ã‚¿
+ * @return ãªã—
  */
 static void GetHash(const wchar_t* _p_path)
 {
-	if (g_stop)
+	if (s_stop)
 	{
 		return;
 	}
-	DWORD status = 1;
-	ShellRegGetDWORD(L"Status", &status);
-	if (status == 4)	// 4:’†’f—v‹
+	int status;
+	if (ReadFileInt(s_wsTempFileStatus.c_str(), &status) == 0)
 	{
-		(void)::CloseHandle(g_handle);
-		g_stop = true;
+		if (status == 3)	// 3:ä¸­æ–­è¦æ±‚
+		{
+			std::string strStop = "stop\x0d\x0a";
+			(void)::WriteFile(s_handle, strStop.c_str(), static_cast<DWORD>(strStop.length()), NULL, NULL);
+			(void)::FlushFileBuffers(s_handle);
+			s_stop = true;
+			return;
+		}
 	}
-	std::wstring hash;
-	if (!GetFileHash(_p_path, hash))
+	unsigned char szHash[MD5_SIZE]{};
+	int ret = GetFileHashMD5(LONG_MAX_PATH, _p_path, BUF_SIZE, reinterpret_cast<char*>(s_buf), MD5_SIZE, szHash);
+	std::wstring wsHash;
+	if (ret == 0)
 	{
-		return;
+		std::wstringstream wss;
+		for (int i = 0; i < MD5_SIZE; i++)
+		{
+			unsigned int uHash = static_cast<unsigned int>(szHash[i]);
+			wss << std::setfill(L'0') << std::hex << std::setw(2) << uHash;
+		}
+		wss >> wsHash;
 	}
-	wchar_t* pwide = reinterpret_cast<wchar_t*>(g_buf);
-	(void)wcscpy_s(pwide, LONG_PATH, _p_path);
-	ShellRegSetPath();
+	else
+	{
+		DWORD dwError = ::GetLastError();
+		std::wstringstream wss;
+		wss << L"error " << ret;
+		wss << L" 0x" << std::hex << std::setfill(L'0') << std::setw(4) << static_cast<long>(dwError);
+		wss >> wsHash;
+	}
+	wchar_t* pwide = reinterpret_cast<wchar_t*>(s_buf);
+	(void)wcscpy_s(pwide, LONG_MAX_PATH, _p_path);
+	WriteFileStrU16(s_wsTempFileProgress.c_str(), LONG_MAX_PATH, reinterpret_cast<wchar_t*>(s_buf));
 	std::wstringstream wss;
-	wss << hash << L"\t";
-	wss << &pwide[g_len];
+	wss << wsHash << L"\t";
+	wss << &pwide[s_len];
 	wss << L"\x0d\x0a";
-	char* pchar = reinterpret_cast<char*>(g_buf);
+	char* pchar = reinterpret_cast<char*>(s_buf);
 	int size = static_cast<int>(wss.str().size() * sizeof(wchar_t));
-	int len = WideToStr(wss.str().c_str(), size, pchar);
-	(void)::WriteFile(g_handle, pchar, len - 1, NULL, NULL);
-	(void)::FlushFileBuffers(g_handle);
+	int len = W2U(wss.str().c_str(), size, pchar);
+	(void)::WriteFile(s_handle, pchar, len - 1, NULL, NULL);
+	(void)::FlushFileBuffers(s_handle);
 }
 
 /*!
- * @brief ƒfƒBƒŒƒNƒgƒŠ‚ğÄ‹A“I‚É‘{¸‚µ‚Äƒtƒ@ƒCƒ‹ƒpƒX‚ğæ“¾‚·‚é
- * @param[in]	_p_path ƒtƒ@ƒCƒ‹ƒpƒX‚Ìƒ|ƒCƒ“ƒ^
- * @return true:¬Œ÷, false:¸”s
+ * @brief ã‚½ãƒ¼ãƒˆ(std::sort)ç”¨ã®æ–‡å­—åˆ—æ¯”è¼ƒé–¢æ•°(ignore case)
+ * @param[in]	_ws1	æ–‡å­—åˆ—1
+ * @param[in]	_ws2	æ–‡å­—åˆ—2
+ * @return true:ws1<=ws2, false:ws1>ws2
+ */
+static bool ComparePath(std::wstring& _ws1, std::wstring& _ws2)
+{
+	std::wstring ws1low = _ws1;
+	std::wstring ws2low = _ws2;
+	std::transform(ws1low.begin(), ws1low.end(), ws1low.begin(), ::tolower);
+	std::transform(ws2low.begin(), ws2low.end(), ws2low.begin(), ::tolower);
+	return (ws1low.compare(ws2low) <= 0);
+}
+
+/*!
+ * @brief ãƒ‡ã‚£ãƒ¬ã‚¯ãƒˆãƒªã‚’å†å¸°çš„ã«æœæŸ»ã—ã¦ãƒ•ã‚¡ã‚¤ãƒ«ãƒ‘ã‚¹ã‚’å–å¾—ã™ã‚‹
+ * @param[in]	_p_path ãƒ•ã‚¡ã‚¤ãƒ«ãƒ‘ã‚¹ã®ãƒã‚¤ãƒ³ã‚¿
+ * @return true:æˆåŠŸ, false:å¤±æ•—
  */
 static bool GetFile(const wchar_t* _p_path)
 {
@@ -347,10 +183,10 @@ static bool GetFile(const wchar_t* _p_path)
 	} while (::FindNextFileW(handle, &find));
 	(void)::FindClose(handle);
 	{
-		std::sort(vct_file.begin(),vct_file.end());
+		std::sort(vct_file.begin(),vct_file.end(), ComparePath);
 		for (std::vector<std::wstring>::iterator it = vct_file.begin(); it != vct_file.end(); ++it)
 		{
-			if (g_stop)
+			if (s_stop)
 			{
 				return false;
 			}
@@ -358,10 +194,10 @@ static bool GetFile(const wchar_t* _p_path)
 		}
 	}
 	{
-		std::sort(vct_dir.begin(),vct_dir.end());
+		std::sort(vct_dir.begin(),vct_dir.end(), ComparePath);
 		for (std::vector<std::wstring>::iterator it = vct_dir.begin(); it != vct_dir.end(); ++it)
 		{
-			if (g_stop)
+			if (s_stop)
 			{
 				return false;
 			}
@@ -375,10 +211,10 @@ static bool GetFile(const wchar_t* _p_path)
 }
 
 /*!
- * @brief “úŒ^(SYSTEMTIME)‚ğ•¶š—ñ‚É•ÏŠ·‚·‚é
- * @param[in]	_time “ú
- * @param[out]	_wstrDate •ÏŠ·‚µ‚½•¶š—ñ
- * @return ‚È‚µ
+ * @brief æ—¥æ™‚å‹(SYSTEMTIME)ã‚’æ–‡å­—åˆ—ã«å¤‰æ›ã™ã‚‹
+ * @param[in]	_time æ—¥æ™‚
+ * @param[out]	_wstrDate å¤‰æ›ã—ãŸæ–‡å­—åˆ—
+ * @return ãªã—
  */
 static void GetStrDate(SYSTEMTIME _time, std::wstring& _wstrDate)
 {
@@ -393,54 +229,46 @@ static void GetStrDate(SYSTEMTIME _time, std::wstring& _wstrDate)
 }
 
 /*!
- * @brief ‰æ–Ê“ü—Í(FromPath)‚ğæ“¾‚·‚éBˆ—ŠÔ‚ğƒŒƒ|[ƒgƒtƒ@ƒCƒ‹‚Ö’Ç‹L‚·‚éB
- * @return ‚È‚µ
+ * @brief ç”»é¢å…¥åŠ›(FromPath)ã‚’å–å¾—ã™ã‚‹ã€‚å‡¦ç†æ™‚é–“ã‚’ãƒ¬ãƒãƒ¼ãƒˆãƒ•ã‚¡ã‚¤ãƒ«ã¸è¿½è¨˜ã™ã‚‹ã€‚
+ * @return ãªã—
  */
-static void MD5Tool()
+static void MD5Tool(const wchar_t* _p_prg, const wchar_t* _p_dir)
 {
 	SYSTEMTIME start, end;
 	(void)::GetLocalTime(&start);
-	if (!ShellRegGetPath(L"FromPath"))
-	{
-		return;
-	}
-	wchar_t* pwide = reinterpret_cast<wchar_t*>(g_buf);
-	g_len = static_cast<int>(wcsnlen_s(pwide, LONG_PATH) + 1);
-	std::wstring wcsPath = pwide;
-	(void)::SHGetSpecialFolderPathW(NULL, pwide, CSIDL_DESKTOP, 0);
+	wchar_t* pwide = reinterpret_cast<wchar_t*>(s_buf);
+	GetDesktopDirectory(sizeof(s_buf), pwide);
 	std::wstring wcsDesktop = pwide;
 	std::wstring wcsStart;
 	GetStrDate(start, wcsStart);
-	ShellRegSetStr(L"Start", wcsStart.c_str(), static_cast<int>(wcsStart.length()));
 	for (int i = 0; i < 1000; i++)
 	{
 		std::wstringstream wss;
-		wss << L"\\\\?\\" << wcsDesktop << L"\\hash_" + wcsStart;
+		wss << LONG_PRE_PATH << wcsDesktop << L"\\hash_" + wcsStart;
 		if (i != 0)
 		{
 			wss << L"_" << std::setfill(L'0') << std::setw(3) << i;
 		}
 		wss << L".txt";
-		g_handle = ::CreateFileW(wss.str().c_str(), GENERIC_WRITE, 0, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-		if (g_handle != INVALID_HANDLE_VALUE)
+		s_handle = ::CreateFileW(wss.str().c_str(), GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+		if (s_handle != INVALID_HANDLE_VALUE)
 		{
 			break;
 		}
 	}
-	if (g_handle == INVALID_HANDLE_VALUE)
+	if (s_handle == INVALID_HANDLE_VALUE)
 	{
 		return;
 	}
-	if (!GetFile(wcsPath.c_str()))
+	if (!GetFile(_p_dir))
 	{
-		(void)::CloseHandle(g_handle);
+		(void)::CloseHandle(s_handle);
 		return;
 	}
-	(void)::CloseHandle(g_handle);
+	(void)::CloseHandle(s_handle);
 	(void)::GetLocalTime(&end);
 	std::wstring wcsEnd;
 	GetStrDate(end, wcsEnd);
-	ShellRegSetStr(L"End", wcsEnd.c_str(), static_cast<int>(wcsEnd.length()));
 	FILETIME fstart, fend;
 	(void)::SystemTimeToFileTime(&start, &fstart);
 	(void)::SystemTimeToFileTime(&end,   &fend);
@@ -448,30 +276,32 @@ static void MD5Tool()
 	__int64 nend   = *((__int64*)&fend);
 	__int64 nsec   = (nend - nstart) / 10000 / 1000;
 	{
-		std::wstringstream wss;
-		wss << L"\\\\?\\" << wcsDesktop << L"\\report.txt";
-		g_handle = ::CreateFileW(wss.str().c_str(), FILE_SHARE_READ | GENERIC_WRITE, 0, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-		if (g_handle != INVALID_HANDLE_VALUE)
 		{
-			(void)::SetFilePointer(g_handle, 0, NULL, FILE_END);
 			std::wstringstream wss;
-			wss << wcsStart << L"\t";
-			wss << wcsEnd   << L"\t";
+			wss << LONG_PRE_PATH << wcsDesktop << L"\\report.txt";
+			s_handle = ::CreateFileW(wss.str().c_str(), GENERIC_WRITE, FILE_SHARE_READ, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+		}
+		if (s_handle != INVALID_HANDLE_VALUE)
+		{
+			(void)::SetFilePointer(s_handle, 0, NULL, FILE_END);
+			std::wstringstream wss;
+			wss << wcsStart				<< L"\t";
+			wss << wcsEnd				<< L"\t";
 			wss << std::setw(7) << nsec << L"\t";
-			wss << wcsPath.substr(4)	<< L"\t";
-			wss << g_stop	<< L"\x0d\x0a";
-			char*  p = reinterpret_cast<char*>(g_buf);
+			wss << _p_dir				<< L"\t";
+			wss << s_stop				<< L"\x0d\x0a";
+			char*  p = reinterpret_cast<char*>(s_buf);
 			int size = static_cast<int>(wss.str().size() * sizeof(wchar_t));
-			int len = WideToStr(wss.str().c_str(), size, p);
-			(void)::WriteFile(  g_handle, p, len - 1, NULL, NULL);
-			(void)::CloseHandle(g_handle);
+			int len = W2U(wss.str().c_str(), size, p);
+			(void)::WriteFile(  s_handle, p, len - 1, NULL, NULL);
+			(void)::CloseHandle(s_handle);
 		}
 	}
 }
 
 /*!
- * @brief ‰æ–Ê‚ğ•\¦‚·‚éBÀsI—¹‚Ü‚Å‘Ò‹@‚·‚éB
- * @return 0ŒÅ’è
+ * @brief ç”»é¢ã‚’è¡¨ç¤ºã™ã‚‹ã€‚å®Ÿè¡Œçµ‚äº†ã¾ã§å¾…æ©Ÿã™ã‚‹ã€‚
+ * @return 0å›ºå®š
  */
 int APIENTRY wWinMain(
 	HINSTANCE hInstance,
@@ -479,34 +309,88 @@ int APIENTRY wWinMain(
 	LPWSTR    lpCmdLine,
 	int       nCmdShow)
 {
-	wchar_t	szCommand[] = L"powershell -NoProfile -ExecutionPolicy Unrestricted -WindowStyle Hidden ./MD5Tool.ps1";
+	UNREFERENCED_PARAMETER(hInstance);
+	UNREFERENCED_PARAMETER(hPrevInstance);
+	UNREFERENCED_PARAMETER(lpCmdLine);
+	UNREFERENCED_PARAMETER(nCmdShow);
+
+	// ãƒ¢ã‚¸ãƒ¥ãƒ¼ãƒ«ãƒ•ã‚¡ã‚¤ãƒ«(exe)ã®ãƒ‡ã‚£ãƒ¬ã‚¯ãƒˆãƒªåå–å¾—
+	if (GetModuleDirectory(LONG_MAX_PATH, reinterpret_cast<wchar_t*>(s_buf)) != 0)
+	{
+		return 0;
+	}
+	std::wstring wsModuleDirectory = reinterpret_cast<wchar_t*>(s_buf);
+
+	// ãƒ†ãƒ³ãƒãƒ©ãƒªãƒ•ã‚¡ã‚¤ãƒ«å(ãƒ‘ãƒ©ãƒ¡ãƒ¼ã‚¿ç”¨)ã‚’å–å¾—ã™ã‚‹
+	if (GetTemporaryFileName(1, s_wsTempFileParameter) != 0)
+	{
+		return 0;
+	}
+
+	// ãƒ†ãƒ³ãƒãƒ©ãƒªãƒ•ã‚¡ã‚¤ãƒ«å(ã‚¹ãƒ†ãƒ¼ã‚¿ã‚¹ç”¨)ã‚’å–å¾—ã™ã‚‹
+	if (GetTemporaryFileName(2, s_wsTempFileStatus) != 0)
+	{
+		return 0;
+	}
+
+	// ãƒ†ãƒ³ãƒãƒ©ãƒªãƒ•ã‚¡ã‚¤ãƒ«å(ãƒ—ãƒ­ã‚°ãƒ¬ã‚¹ç”¨)ã‚’å–å¾—ã™ã‚‹
+	if (GetTemporaryFileName(3, s_wsTempFileProgress) != 0)
+	{
+		return 0;
+	}
+
+	WriteFileInt(s_wsTempFileStatus.c_str(), 0);	// 0:NOP
+
+	// ã‚³ãƒãƒ³ãƒ‰ã‚’ä½œæˆã™ã‚‹
+	std::wstring wsCmd;
+	{
+		std::wstringstream wss;
+		wss << L"powershell -NoProfile -ExecutionPolicy Unrestricted -WindowStyle Hidden \"";
+		wss << wsModuleDirectory;
+		wss << L"\\MD5Tool.ps1\" \"";
+		wss << s_wsTempFileParameter;
+		wss << L"\" \"";
+		wss << s_wsTempFileStatus;
+		wss << L"\" \"";
+		wss << s_wsTempFileProgress;
+		wss << L"\"";
+		wsCmd = wss.str();
+	}
+
 	STARTUPINFOW si{};
 	PROCESS_INFORMATION pi{};
 	si.cb = sizeof(si);
 	si.dwFlags = STARTF_USESHOWWINDOW;
 
 	DWORD dwRet;
-	if (CreateProcessW(nullptr, szCommand, nullptr, nullptr, false, 0, nullptr, nullptr, &si, &pi))
+	if (CreateProcessW(nullptr, &wsCmd[0], nullptr, nullptr, false, 0, nullptr, nullptr, &si, &pi))
 	{
 		do
 		{
 			dwRet = ::WaitForSingleObject(pi.hProcess, 500);
 			if (dwRet == WAIT_TIMEOUT)
 			{
-				DWORD status = 0xFFFFFFFF;
-				ShellRegGetDWORD(L"Status", &status);
-				if (status == 1)						// 1:Às—v‹
+				int status = 0;
+				ReadFileInt(s_wsTempFileStatus.c_str(), &status);
+				if (status == 1)										// 1:å®Ÿè¡Œè¦æ±‚
 				{
-					g_stop = false;
-					ShellRegSetDWORD(L"Status", 2);		// 2:Às’†
-					MD5Tool();
-					if (!g_stop)
+					std::map<std::wstring, std::wstring> map;
+					ReadFileMap(s_wsTempFileParameter.c_str(), sizeof(s_buf), reinterpret_cast<char*>(s_buf), map);
+					std::wstring wsKey = L"dir";
+					if (map.count(wsKey) > 0)
 					{
-						ShellRegSetDWORD(L"Status", 3);	// 3:³íI—¹
+						std::wstring wsDir = map[wsKey];
+						s_stop = false;
+						WriteFileInt(s_wsTempFileStatus.c_str(), 2);	// 2:å®Ÿè¡Œä¸­
+						MD5Tool(s_wsTempFileProgress.c_str(), wsDir.c_str());
 					}
+					WriteFileInt(s_wsTempFileStatus.c_str(), 0);		// 0:NOP
 				}
 			}
 		} while (dwRet != WAIT_OBJECT_0);
 	}
+	(void)::DeleteFile(s_wsTempFileParameter.c_str());
+	(void)::DeleteFile(s_wsTempFileStatus.c_str());
+	(void)::DeleteFile(s_wsTempFileProgress.c_str());
 	return 0;
 }

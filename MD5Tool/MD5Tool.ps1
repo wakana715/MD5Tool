@@ -4,49 +4,26 @@
 # .PARAMETER	Arg[0]		[Out]		パラメータファイル、GUIの入力値を出力する
 # .PARAMETER	Arg[1]		[In,Out]	ステータスファイル、状態を入出力する
 # .PARAMETER	Arg[2]		[In]		プログレスファイル、進捗を取得する
+if ($Args.Count -lt 3)
+{
+    exit
+}
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
+$parameterFile  = $Args[0]
+$statusFile     = $Args[1]
+$progressFile   = $Args[2]
 $form			= New-Object System.Windows.Forms.Form
-$comboBoxFolder	= New-Object System.Windows.Forms.ComboBox
+$comboBoxDir	= New-Object System.Windows.Forms.ComboBox
 $buttonOpen		= New-Object System.Windows.Forms.Button
 $labelInfo		= New-Object System.Windows.Forms.Label
 $buttonRun		= New-Object System.Windows.Forms.Button
 $buttonStop		= New-Object System.Windows.Forms.Button
 $timer			= New-Object System.Windows.Forms.Timer
-$titleFolder	= "Folder"
-
-function SetRegistoryString
-{
-    Param
-    (
-        [string]$path,
-        [string]$name,
-        [string]$value
-    )
-    $ErrorActionPreference = "silentlycontinue"
-    New-Item         -Path $path
-    New-ItemProperty -Path $path -Name $name -PropertyType 'String' -Value $value
-    Set-ItemProperty -Path $path -Name $name                        -Value $value
-    $ErrorActionPreference = "continue"
-}
-
-function SetRegistoryDword
-{
-    Param
-    (
-        [string]$path,
-        [string]$name,
-        [int]$value
-    )
-    $ErrorActionPreference = "silentlycontinue"
-    New-Item         -Path $path
-    New-ItemProperty -Path $path -Name $name -PropertyType 'DWord' -Value $value
-    Set-ItemProperty -Path $path -Name $name                       -Value $value
-    $ErrorActionPreference = "continue"
-}
+$titleDirectory	= "Directory"
 
 # .DESCRIPTION
-# Folderのオープンボタンイベント関数。
+# Directoryのオープンボタンイベント関数。
 # フォルダ選択ダイアログでフォルダ名を入力する。
 # 入力したフォルダ名を引数指定のコントロールへ設定する。
 # .PARAMETER	senderFrom	未使用
@@ -61,10 +38,10 @@ function buttonOpen_Click()
     $buttonOpen.Enabled = $False
     $form.Refresh()
     $dialog=New-Object System.Windows.Forms.FolderBrowserDialog
-    $dialog.Description="Select " + $titleFolder
+    $dialog.Description="Select " + $titleDirectory
     if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK)
     {
-        $comboBoxFolder.Text = $dialog.SelectedPath
+        $comboBoxDir.Text = $dialog.SelectedPath
     }
     $buttonOpen.Enabled = $True
     $form.Refresh()
@@ -81,7 +58,7 @@ function buttonStop_Click()
         [System.Object]$senderFrom,
         [System.EventArgs]$e
     )
-    SetRegistoryDword "HKCU:\Software\MD5Tool" "Status" 4 # 4:中断要求
+    Set-Content -Path $statusFile -Value "0003" -Encoding ascii # 3:中断要求
 }
 
 # .DESCRIPTION
@@ -95,8 +72,8 @@ function buttonRun_Click()
         [System.Object]$senderFrom,
         [System.EventArgs]$e
     )
-    $path = $comboBoxFolder.Text
-    if ($path -eq "" -Or (Test-Path $path) - eq $False)
+    $path = $comboBoxDir.Text
+    if ($path -eq "" -Or (Test-Path $path) -eq $False)
     {
         [System.Windows.Forms.MessageBox]::Show($path + " is not found", "Error", "OK", "Error")
         return
@@ -104,14 +81,16 @@ function buttonRun_Click()
     $res = [System.Windows.Forms.MessageBox]::Show("Do you want to run it?", "Information", 1, "Information") # 1:[OK][Cancel]
     if ($res -eq "OK")
     {
-        $comboBoxFolder.Enabled = $False
+        $comboBoxDir.Enabled = $False
         $buttonOpen.Enabled = $False
         $buttonStop.Enabled = $True
         $buttonRun.Enabled = $False
         $labelInfo.Text = ""
         $form.Refresh()
-        SetRegistoryString "HKCU:\Software\MD5Tool" "FromPath" $path
-        SetRegistoryDword  "HKCU:\Software\MD5Tool" "Status" 1 # 1:実行要求
+        $value = "dir=" + $path
+        Set-Content -Path $parameterFile -Value "K=V"  -Encoding unicode # DUMMY
+        Add-Content -Path $parameterFile -Value $value -Encoding unicode
+        Set-Content -Path $statusFile    -Value "0001" -Encoding ascii # 1:実行要求
         $timer.Enabled = $True
     }
 }
@@ -127,38 +106,38 @@ function timer_Tick()
         [System.Object]$senderFrom,
         [System.EventArgs]$e
     )
-    $regStatus = Get-ItemProperty -Path "HKCU:\Software\MD5Tool" -Name "Status"
-    if ($regStatus.Status -eq 2)    # 2:実行中
-    {
-        $regPath = Get-ItemProperty -Path "HKCU:\Software\MD5Tool" -Name "ToPath"
-        $labelInfo.Text = $regPath.ToPath
-        $form.Refresh()
-    }
-    if ($regStatus.Status -eq 3)    # 3:正常終了
+    $strStatus = Get-Content -Path $statusFile -Encoding ascii
+    $status = [Convert]::ToInt64($strStatus, 16)
+    if ($status -eq 0)		# 0:NOP
     {
         $timer.Enabled = $False
-        $comboBoxFolder.Enabled = $True
+        $comboBoxDir.Enabled = $True
         $buttonOpen.Enabled = $True
         $buttonStop.Enabled = $False
         $buttonRun.Enabled = $True
         $labelInfo.Text = "Finished"
         $form.Refresh()
-        SetRegistoryDword "HKCU:\Software\MD5Tool" "Status" 0 # 0:実行待ち
     }
-    if ($regStatus.Status -eq 4)    # 4:中断要求
+    if ($status -eq 2)		# 2:実行中
+    {
+        $path = Get-Content -Path $progressFile -Encoding unicode
+        $labelInfo.Text = $path
+        $form.Refresh()
+    }
+    if ($status -eq 3)		# 3:中断要求
     {
         $timer.Enabled = $False
-        $comboBoxFolder.Enabled = $True
+        $comboBoxDir.Enabled = $True
         $buttonOpen.Enabled = $True
         $buttonStop.Enabled = $False
         $buttonRun.Enabled = $True
         $labelInfo.Text = "Stop"
         $form.Refresh()
-        SetRegistoryDword "HKCU:\Software\MD5Tool" "Status" 0 # 0:実行待ち
+        Set-Content -Path $statusFile -Value "0000" -Encoding ascii # 0:NOP
     }
 }
 
-SetRegistoryDword "HKCU:\Software\MD5Tool" "Status" 0 # 0:実行待ち
+Set-Content -Path $statusFile -Value "0000" -Encoding ascii # 0:NOP
 $Font = New-Object System.Drawing.Font("ＭＳ ゴシック",12)
 
 $form.Text = "MD5Tool"
@@ -167,22 +146,22 @@ $form.MinimumSize = New-Object System.Drawing.Size(320,200)
 $form.StartPosition = "CenterScreen"
 $form.font = $Font
 
-$comboBoxFolder.Location = New-Object System.Drawing.Point(100,10)
-$comboBoxFolder.size = New-Object System.Drawing.Size(350,30)
-$comboBoxFolder.Anchor = 1 + 4 + 8 # 1:Top + 4:Left + 8:Right
-$comboBoxFolder.DropDownStyle = "DropDown"
-$comboBoxFolder.FlatStyle = "standard"
-$comboBoxFolder.font = $Font
-$comboBoxFolder.TabIndex = 0
+$comboBoxDir.Location = New-Object System.Drawing.Point(100,10)
+$comboBoxDir.size = New-Object System.Drawing.Size(350,30)
+$comboBoxDir.Anchor = 1 + 4 + 8 # 1:Top + 4:Left + 8:Right
+$comboBoxDir.DropDownStyle = "DropDown"
+$comboBoxDir.FlatStyle = "standard"
+$comboBoxDir.font = $Font
+$comboBoxDir.TabIndex = 0
 
-$comboBoxHeight = $comboBoxFolder.Size.Height
+$comboBoxHeight = $comboBoxDir.Size.Height
 
-$labelFolder = New-Object System.Windows.Forms.Label
-$labelFolder.Location = New-Object System.Drawing.Point(10,10)
-$labelFolder.Size = New-Object System.Drawing.Size(90,$comboBoxHeight)
-$labelFolder.Text = $titleFolder
-$labelFolder.TextAlign = 16 # 16:MiddleLeft
-$form.Controls.Add($labelFolder)
+$labelDirectory = New-Object System.Windows.Forms.Label
+$labelDirectory.Location = New-Object System.Drawing.Point(10,10)
+$labelDirectory.Size = New-Object System.Drawing.Size(90,$comboBoxHeight)
+$labelDirectory.Text = $titleDirectory
+$labelDirectory.TextAlign = 16 # 16:MiddleLeft
+$form.Controls.Add($labelDirectory)
 
 $buttonOpen.Location = New-Object System.Drawing.Point(450,10)
 $buttonOpen.Size = New-Object System.Drawing.Size(40,$comboBoxHeight)
@@ -217,7 +196,7 @@ $timer.Enabled = $False
 $timer.Interval = 500
 $timer.Add_Tick({param($s,$e) timer_Tick $s $e})
 
-$xmlPath = $PSScriptRoot + "\FCBTool.xml"
+$xmlPath = $PSScriptRoot + "\MD5Tool.xml"
 # xml 読込
 # TIPS:StreamReader を使用しないと "他のプロセスが使用中" になる
 $sr = [System.IO.StreamReader]::new([System.IO.FileStream]::new($xmlPath,
@@ -225,13 +204,13 @@ $sr = [System.IO.StreamReader]::new([System.IO.FileStream]::new($xmlPath,
       [System.IO.FileShare]::ReadWrite + [System.IO.FileShare]::Delete))
 $xmlTextReader = New-Object System.Xml.XmlTextReader($sr)
 $isDirectory = $false
-$folder = ""
+$Directory = ""
 while ($xmlTextReader.Read())
 {
     if ($xmlTextReader.NodeType.Equals([System.Xml.XmlNodeType]::Element))
     {
         $isDirectory = $false
-        if ($xmlTextReader.Name.Equals($titleFolder))
+        if ($xmlTextReader.Name.Equals($titleDirectory))
         {
             $isDirectory = $true
         }
@@ -240,7 +219,7 @@ while ($xmlTextReader.Read())
     {
         if ($isDirectory)
         {
-            $folder = $xmlTextReader.Value
+            $Directory = $xmlTextReader.Value
         }
     }
 }
@@ -251,36 +230,36 @@ $sr.Dispose()
 
 # コンボボックスへ項目を設定
 $i = 0
-foreach ($path in $folder.Split("`n"))
+foreach ($path in $Directory.Split("`n"))
 {
     $path = $path.Trim()
     if ($path.Length -gt 0)
     {
         if ($i -eq 0)
         {
-            $comboBoxFolder.Text = $path
+            $comboBoxDir.Text = $path
         }
-        [void]$comboBoxFolder.Items.Add($path)
+        [void]$comboBoxDir.Items.Add($path)
         $i++
     }
 }
-$form.Controls.Add($comboBoxFolder)
+$form.Controls.Add($comboBoxDir)
 
 $form.ShowDialog()
 
 # コンボボックスの項目を xml に保存
 $crlf = [char]13 + [char]10
-$folder = $crlf
-$text = $comboBoxFolder.Text.Trim()
+$Directory = $crlf
+$text = $comboBoxDir.Text.Trim()
 if ($text.Length -gt 0)
 {
-    $folder += $text + $crlf
+    $Directory += $text + $crlf
 }
-foreach ($item in $comboBoxFolder.Items)
+foreach ($item in $comboBoxDir.Items)
 {
     if ($item -ne $text)
     {
-        $folder += $item + $crlf
+        $Directory += $item + $crlf
     }
 }
 
@@ -291,7 +270,7 @@ $xmlTextWriter.WriteStartDocument()
 $xmlTextWriter.WriteWhitespace($crlf)
 $xmlTextWriter.WriteStartElement("Settings")
 $xmlTextWriter.WriteString($crlf)
-$xmlTextWriter.WriteElementString($titleFolder, $folder)
+$xmlTextWriter.WriteElementString($titleDirectory, $Directory)
 $xmlTextWriter.WriteWhitespace($crlf)
 $xmlTextWriter.WriteEndElement()
 $xmlTextWriter.WriteWhitespace($crlf)
